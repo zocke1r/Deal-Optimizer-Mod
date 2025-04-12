@@ -19,7 +19,7 @@ using UnityEngine.Events;
 using UnityEngine.SceneManagement;
 using static Il2CppScheduleOne.UI.Handover.HandoverScreen;
 
-[assembly: MelonInfo(typeof(DealOptimizer_IL2CPP.Core), "DealOptimizer_IL2CPP", "2.0.0", "zocke1r", null)]
+[assembly: MelonInfo(typeof(DealOptimizer_IL2CPP.Core), "DealOptimizer_IL2CPP", "2.0.2", "zocke1r", null)]
 [assembly: MelonGame("TVGS", "Schedule I")]
 
 namespace DealOptimizer_IL2CPP
@@ -67,12 +67,12 @@ namespace DealOptimizer_IL2CPP
                 return (maxSpend, dailyAverage);
             }
 
-            public static int FindOptimalPrice(Customer customer, ProductDefinition product, int quantity, float currentPrice, float maxSpend, float minSuccessProbability = 0.95f)
+            public static int FindOptimalPrice(Customer customer, ProductDefinition product, int quantity, float currentPrice, float maxSpend, float minSuccessProbability = 0.98f)
             {
                 int low = (int)currentPrice;
                 int high = (int)maxSpend;
                 int bestFailingPrice = (int)currentPrice;
-                int maxIterations = 10;
+                int maxIterations = 20;
                 int iterations = 0;
 
                 Melon<Core>.Logger.Msg($"Binary Search Start - Price: {currentPrice}, MaxSpend: {maxSpend}, Quantity: {quantity}, MinProbability: {minSuccessProbability}");
@@ -188,7 +188,7 @@ namespace DealOptimizer_IL2CPP
                 ContractInfo contractOffer = customer.OfferedContractInfo;
                 ProductDefinition product = Registry.GetItem<ProductDefinition>(contractOffer.Products.entries[0].ProductID);
 
-                int optimalPrice = DealCalculator.FindOptimalPrice(customer, product, quantity, currentPrice * 0.5f, maxSpend);
+                int optimalPrice = DealCalculator.FindOptimalPrice(customer, product, quantity, currentPrice * 0.25f, maxSpend);
 
                 if (optimalPrice > currentPrice || change < 0)
                 {
@@ -271,17 +271,17 @@ namespace DealOptimizer_IL2CPP
 
             if (probability >= 0.95f)
             {
-                DisplayHelper.UpdateCounterOfferDisplayText("Guaranteed Success", $"Price per unit: {offerData.Price / offerData.Quantity}");
+                DisplayHelper.UpdateCounterOfferDisplayText("Guaranteed Success", $"Price per unit: {offerData.Price / offerData.Quantity}\nMax Spend: {maxSpendDecimal}");
                 return true;
             }
             else if (probability <= 0.05f)
             {
-                DisplayHelper.UpdateCounterOfferDisplayText("Guaranteed Failure", $"Price per unit: {offerData.Price / offerData.Quantity}");
+                DisplayHelper.UpdateCounterOfferDisplayText("Guaranteed Failure", $"Price per unit: {offerData.Price / offerData.Quantity}\nMax Spend: {maxSpendDecimal}");
                 return false;
             }
             else
             {
-                DisplayHelper.UpdateCounterOfferDisplayText($"Probability of success: {probabilityPercent}%", $"Price per unit: {offerData.Price / offerData.Quantity}");
+                DisplayHelper.UpdateCounterOfferDisplayText($"Probability of success: {probabilityPercent}%", $"Price per unit: {offerData.Price / offerData.Quantity}\nMax Spend: {maxSpendDecimal}");
                 return UnityEngine.Random.Range(0f, 1f) < probability;
             }
         }
@@ -378,7 +378,7 @@ namespace DealOptimizer_IL2CPP
 
             if (!homeScreenOpened && counterofferInterfaceOpened)
             {
-                GUI.Label(new Rect((Screen.width / 2) - 190, (Screen.height / 2) - 250, 380, 50), counterOfferDisplayText, displayTextStyle);
+                GUI.Label(new Rect((Screen.width / 2) - 190, (Screen.height / 2) - 250, 380, 70), counterOfferDisplayText, displayTextStyle);
             }
         }
 
