@@ -92,6 +92,11 @@ namespace DealOptimizer_IL2CPP
                     if (success)
                     {
                         low = mid + 1;
+                        if (low == high)
+                        {
+                            bestFailingPrice = CalculateSuccessProbability(customer, product, quantity, mid + 1) > minSuccessProbability ? mid + 1 : mid;
+                            break;
+                        }
                     }
                     else
                     {
