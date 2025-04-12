@@ -1,25 +1,25 @@
-﻿using MelonLoader;
-using UnityEngine.Events;
-using UnityEngine;
-using UnityEngine.SceneManagement;
+﻿using System.Text;
 using HarmonyLib;
-using System.Text;
 using Il2CppScheduleOne;
 using Il2CppScheduleOne.DevUtilities;
 using Il2CppScheduleOne.Economy;
 using Il2CppScheduleOne.GameTime;
+using Il2CppScheduleOne.ItemFramework;
+using Il2CppScheduleOne.Levelling;
+using Il2CppScheduleOne.Messaging;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.Product;
 using Il2CppScheduleOne.Quests;
-using Il2CppScheduleOne.UI.Phone.Messages;
-using Il2CppScheduleOne.UI.Phone;
-using Il2CppScheduleOne.Messaging;
-using Il2CppScheduleOne.ItemFramework;
 using Il2CppScheduleOne.UI.Handover;
-using Il2CppScheduleOne.Levelling;
+using Il2CppScheduleOne.UI.Phone;
+using Il2CppScheduleOne.UI.Phone.Messages;
+using MelonLoader;
+using UnityEngine;
+using UnityEngine.Events;
+using UnityEngine.SceneManagement;
 using static Il2CppScheduleOne.UI.Handover.HandoverScreen;
 
-[assembly: MelonInfo(typeof(DealOptimizer_IL2CPP.Core), "DealOptimizer_IL2CPP", "1.0.1", "xyrilyn", null)]
+[assembly: MelonInfo(typeof(DealOptimizer_IL2CPP.Core), "DealOptimizer_IL2CPP", "1.0.1", "zocke1r", null)]
 [assembly: MelonGame("TVGS", "Schedule I")]
 
 namespace DealOptimizer_IL2CPP
@@ -30,6 +30,31 @@ namespace DealOptimizer_IL2CPP
 
         private GUIStyle displayTextStyle;
         private static string counterOfferDisplayText = "";
+
+        private static float CalculateSuccessProbability(Customer customer, ProductDefinition product, int quantity, float price)
+        {
+            CustomerData customerData = customer.CustomerData;
+
+            float valueProposition = Customer.GetValueProposition(Registry.GetItem<ProductDefinition>(customer.OfferedContractInfo.Products.entries[0].ProductID), customer.OfferedContractInfo.Payment / (float)customer.OfferedContractInfo.Products.entries[0].Quantity);
+            float productEnjoyment = customer.GetProductEnjoyment(product, customerData.Standards.GetCorrespondingQuality());
+            float enjoymentNormalized = Mathf.InverseLerp(-1f, 1f, productEnjoyment);
+            float newValueProposition = Customer.GetValueProposition(product, price / (float)quantity);
+            float quantityRatio = Mathf.Pow((float)quantity / (float)customer.OfferedContractInfo.Products.entries[0].Quantity, 0.6f);
+            float quantityMultiplier = Mathf.Lerp(0f, 2f, quantityRatio * 0.5f);
+            float penaltyMultiplier = Mathf.Lerp(1f, 0f, Mathf.Abs(quantityMultiplier - 1f));
+
+            float customerWeightedValue = productEnjoyment * valueProposition;
+            float proposedWeightedValue = enjoymentNormalized * penaltyMultiplier * newValueProposition;
+
+            float valueDifference = customerWeightedValue - proposedWeightedValue;
+            float threshold = Mathf.Lerp(0f, 1f, valueDifference / 0.2f);
+            float bonus = Mathf.Lerp(0f, 0.2f, Mathf.Max(customer.CurrentAddiction, customer.NPC.RelationData.NormalizedRelationDelta));
+
+            float thresholdMinusBonus = threshold - bonus;
+            float probability = (0.9f - thresholdMinusBonus) / 0.9f;
+
+            return Mathf.Clamp01(probability);
+        }
 
         [HarmonyPatch(typeof(CounterofferInterface), nameof(CounterofferInterface.Open))]
         static class CounterofferInterfacePostOpenPatch
@@ -57,36 +82,48 @@ namespace DealOptimizer_IL2CPP
 
                 CounterofferInterface counterofferInterface = messagesApp.CounterofferInterface;
 
-                // Change price without notifying listeners
-                counterofferInterface.ChangePrice((int)(maxSpend - price));
-
-                // Check price against maxSpend again
-                string priceText = counterofferInterface.PriceInput.text;
-                if (!DefinitelyLessThan(float.Parse(priceText), maxSpend))
-                {
-                    counterofferInterface.ChangePrice(-1);
-                }
-
-                // Check value proposition and increment quantity if value prop is too low to try and increase it
+                // Binary search to find highest price that just barely fails
+                int low = (int)price;
+                int high = (int)maxSpend;
+                int bestFailingPrice = (int)price;
+                int maxIterations = 10;
                 int iterations = 0;
-                bool success = false;
-                int quantityToTry = quantity;
+                float minSuccessProbability = 0.95f; // 95% minimum success probability
 
-                while (!success && iterations < 5)
+                Melon<Core>.Logger.Msg($"Binary Search Start - Price: {price}, MaxSpend: {maxSpend}, Quantity: {quantity}, MinProbability: {minSuccessProbability}");
+
+                while (iterations < maxIterations && low < high)
                 {
-                    success = checkValueProposition(customer, product, quantityToTry, maxSpend);
-                    if (!success)
+                    int mid = (low + high) / 2;
+                    float probability = CalculateSuccessProbability(customer, product, quantity, mid);
+                    bool success = probability >= minSuccessProbability;
+
+                    Melon<Core>.Logger.Msg($"Binary Search Iteration {iterations}:");
+                    Melon<Core>.Logger.Msg($"  Testing price: {mid}");
+                    Melon<Core>.Logger.Msg($"  Success probability: {probability}");
+                    Melon<Core>.Logger.Msg($"  Success: {success}");
+                    Melon<Core>.Logger.Msg($"  Range: low={low}, high={high}");
+
+                    if (success)
                     {
-                        counterofferInterface.ChangeQuantity(1);
+                        low = mid + 1;
                     }
-                    quantityToTry += 1;
+                    else
+                    {
+                        bestFailingPrice = mid;
+                        high = mid;
+                    }
                     iterations++;
                 }
 
-                // If still unsuccessful after N iterations, reset quantity but leave price as calculated max
-                if (!success)
+                Melon<Core>.Logger.Msg($"Binary Search Complete:");
+                Melon<Core>.Logger.Msg($"  Final bestFailingPrice: {bestFailingPrice}");
+                Melon<Core>.Logger.Msg($"  Final range: low={low}, high={high}");
+
+                // If we found a failing price, use it
+                if (bestFailingPrice > price)
                 {
-                    counterofferInterface.ChangeQuantity(-counterofferInterface.MaxQuantity);
+                    counterofferInterface.ChangePrice(bestFailingPrice - (int)price);
                 }
             }
         }
@@ -100,32 +137,52 @@ namespace DealOptimizer_IL2CPP
         {
             CustomerData customerData = customer.CustomerData;
 
-            float valueProposition = Customer.GetValueProposition(Registry.GetItem<ProductDefinition>(customer.OfferedContractInfo.Products.entries[0].ProductID), customer.OfferedContractInfo.Payment / (float)customer.OfferedContractInfo.Products.entries[0].Quantity);
-            float productEnjoyment = customer.GetProductEnjoyment(product, customerData.Standards.GetCorrespondingQuality());
-            float num2 = Mathf.InverseLerp(-1f, 1f, productEnjoyment);
-            float valueProposition2 = Customer.GetValueProposition(product, price / (float)quantity);
-            float num3 = Mathf.Pow((float)quantity / (float)customer.OfferedContractInfo.Products.entries[0].Quantity, 0.6f);
-            float num4 = Mathf.Lerp(0f, 2f, num3 * 0.5f);
-            float num5 = Mathf.Lerp(1f, 0f, Mathf.Abs(num4 - 1f));
+            float originalValueProposition = Customer.GetValueProposition(Registry.GetItem<ProductDefinition>(customer.OfferedContractInfo.Products.entries[0].ProductID), customer.OfferedContractInfo.Payment / (float)customer.OfferedContractInfo.Products.entries[0].Quantity);
 
-            if (valueProposition2 * num5 > valueProposition)
+            float productEnjoyment = customer.GetProductEnjoyment(product, customerData.Standards.GetCorrespondingQuality());
+            float enjoymentNormalized = Mathf.InverseLerp(-1f, 1f, productEnjoyment);
+
+            float newValueProposition = Customer.GetValueProposition(product, price / (float)quantity);
+            float quantityRatio = Mathf.Pow((float)quantity / (float)customer.OfferedContractInfo.Products.entries[0].Quantity, 0.6f);
+            float quantityMultiplier = Mathf.Lerp(0f, 2f, quantityRatio * 0.5f);
+            float penaltyMultiplier = Mathf.Lerp(1f, 0f, Mathf.Abs(quantityMultiplier - 1f));
+
+            Melon<Core>.Logger.Msg($"\nDetailed Value Proposition Check:");
+            Melon<Core>.Logger.Msg($"  Input Price: {price}, Quantity: {quantity}");
+            Melon<Core>.Logger.Msg($"  Price per unit: {price / quantity}");
+            Melon<Core>.Logger.Msg($"  Original VP: {originalValueProposition}");
+            Melon<Core>.Logger.Msg($"  New VP: {newValueProposition}");
+            Melon<Core>.Logger.Msg($"  Product Enjoyment: {productEnjoyment}");
+            Melon<Core>.Logger.Msg($"  Enjoyment Normalized: {enjoymentNormalized}");
+            Melon<Core>.Logger.Msg($"  Quantity Ratio: {quantityRatio}");
+            Melon<Core>.Logger.Msg($"  Quantity Multiplier: {quantityMultiplier}");
+            Melon<Core>.Logger.Msg($"  Penalty Multiplier: {penaltyMultiplier}");
+            Melon<Core>.Logger.Msg($"  Final Comparison: {newValueProposition * penaltyMultiplier} vs {originalValueProposition}");
+
+            if (newValueProposition * penaltyMultiplier > originalValueProposition)
             {
+                Melon<Core>.Logger.Msg("  Result: Success (new VP * penalty > original VP)");
                 return true;
             }
-            if (valueProposition2 < 0.12f)
+            if (newValueProposition < 0.12f)
             {
+                Melon<Core>.Logger.Msg("  Result: Failure (new VP < 0.12)");
                 return false;
             }
 
-            float num6 = productEnjoyment * valueProposition;
-            float num7 = num2 * num5 * valueProposition2;
+            float customerWeightedValue = productEnjoyment * originalValueProposition;
+            float proposedWeightedValue = enjoymentNormalized * penaltyMultiplier * newValueProposition;
 
-            if (num7 > num6)
+            Melon<Core>.Logger.Msg($"  Weighted Comparison: {proposedWeightedValue} vs {customerWeightedValue}");
+
+            if (proposedWeightedValue > customerWeightedValue)
             {
+                Melon<Core>.Logger.Msg("  Result: Success (weighted value higher)");
                 return true;
             }
             else
             {
+                Melon<Core>.Logger.Msg("  Result: Failure (weighted value lower)");
                 return false;
             }
         }
@@ -144,7 +201,76 @@ namespace DealOptimizer_IL2CPP
         {
             static void Postfix(int change)
             {
-                OfferPriceChangeCheckNoLog();
+                MessagesApp messagesApp = PlayerSingleton<MessagesApp>.Instance;
+                if (messagesApp == null || !messagesApp.CounterofferInterface.IsOpen) return;
+
+                string contactName = messagesApp.currentConversation.contactName;
+                NPC sender = messagesApp.currentConversation.sender;
+                Il2CppSystem.Collections.Generic.List<Customer> unlockedCustomers = Customer.UnlockedCustomers;
+                Customer customer = unlockedCustomers.Find((Il2CppSystem.Predicate<Customer>)((cust) =>
+                {
+                    NPC npc = cust.NPC;
+                    return npc.fullName == contactName;
+                }));
+
+                CustomerData customerData = customer.CustomerData;
+                float adjustedWeeklySpend = customerData.GetAdjustedWeeklySpend(customer.NPC.RelationData.RelationDelta / 5f);
+                Il2CppSystem.Collections.Generic.List<EDay> orderDays = customerData.GetOrderDays(customer.CurrentAddiction, customer.NPC.RelationData.RelationDelta / 5f);
+                float num = adjustedWeeklySpend / orderDays.Count;
+                float maxSpend = num * 3f;
+
+                CounterofferInterface counterofferInterface = messagesApp.CounterofferInterface;
+                string quantityText = counterofferInterface.ProductLabel.text;
+                int quantity = int.Parse(quantityText.Split("x ")[0]);
+                string priceText = counterofferInterface.PriceInput.text;
+                float currentPrice = priceText == "" ? 0 : float.Parse(priceText);
+
+                ContractInfo contractOffer = customer.OfferedContractInfo;
+                ProductDefinition product = Registry.GetItem<ProductDefinition>(contractOffer.Products.entries[0].ProductID);
+
+                // Binary search to find highest price that just barely fails
+                int low = (int)currentPrice;
+                int high = (int)maxSpend;
+                int bestFailingPrice = (int)currentPrice;
+                int maxIterations = 10;
+                int iterations = 0;
+                float minSuccessProbability = 0.95f; // 50% minimum success probability
+
+                Melon<Core>.Logger.Msg($"Quantity Change Binary Search Start - Price: {currentPrice}, MaxSpend: {maxSpend}, Quantity: {quantity}, MinProbability: {minSuccessProbability}");
+
+                while (iterations < maxIterations && low < high)
+                {
+                    int mid = (low + high) / 2;
+                    float probability = CalculateSuccessProbability(customer, product, quantity, mid);
+                    bool success = probability >= minSuccessProbability;
+
+                    Melon<Core>.Logger.Msg($"Quantity Change Binary Search Iteration {iterations}:");
+                    Melon<Core>.Logger.Msg($"  Testing price: {mid}");
+                    Melon<Core>.Logger.Msg($"  Success probability: {probability}");
+                    Melon<Core>.Logger.Msg($"  Success: {success}");
+                    Melon<Core>.Logger.Msg($"  Range: low={low}, high={high}");
+
+                    if (success)
+                    {
+                        low = mid + 1;
+                    }
+                    else
+                    {
+                        bestFailingPrice = mid;
+                        high = mid;
+                    }
+                    iterations++;
+                }
+
+                Melon<Core>.Logger.Msg($"Quantity Change Binary Search Complete:");
+                Melon<Core>.Logger.Msg($"  Final bestFailingPrice: {bestFailingPrice}");
+                Melon<Core>.Logger.Msg($"  Final range: low={low}, high={high}");
+
+                // If we found a failing price, use it
+                if (bestFailingPrice > currentPrice)
+                {
+                    counterofferInterface.ChangePrice(bestFailingPrice - (int)currentPrice);
+                }
             }
         }
 
@@ -304,12 +430,12 @@ namespace DealOptimizer_IL2CPP
 
             if (valueProposition2 * num5 > valueProposition)
             {
-                UpdateCounterOfferDisplayText($"Guaranteed Success", "");
+                UpdateCounterOfferDisplayText($"Guaranteed Success", $"Price per unit: {price / quantity}");
                 return true;
             }
             if (valueProposition2 < 0.12f)
             {
-                UpdateCounterOfferDisplayText("Guaranteed Failure", $"Value Proposition Too Low ({valueProposition2})");
+                UpdateCounterOfferDisplayText("Guaranteed Failure", $" Value Proposition Too Low ({valueProposition2}) Price per unit: {price / quantity}");
                 return false;
             }
 
@@ -318,7 +444,7 @@ namespace DealOptimizer_IL2CPP
 
             if (num7 > num6)
             {
-                UpdateCounterOfferDisplayText("Guaranteed Success", "");
+                UpdateCounterOfferDisplayText("Guaranteed Success", $"Price per unit: {price / quantity}");
                 return true;
             }
 
@@ -331,12 +457,12 @@ namespace DealOptimizer_IL2CPP
 
             if (thresholdMinusBonus < 0)
             {
-                UpdateCounterOfferDisplayText("Guaranteed Success", "");
+                UpdateCounterOfferDisplayText("Guaranteed Success", $"Price per unit: {price / quantity}");
             }
             else
             {
                 decimal probability = Math.Round((decimal)((0.9 - thresholdMinusBonus) / 0.9 * 100), 3);
-                UpdateCounterOfferDisplayText($"Probability of success: {probability}%", "");
+                UpdateCounterOfferDisplayText($"Probability of success: {probability}%", $"Price per unit: {price / quantity}");
             }
 
             return UnityEngine.Random.Range(0f, 0.9f) + num10 > num9;
