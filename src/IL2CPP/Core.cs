@@ -8,18 +8,21 @@ using Il2CppScheduleOne.ItemFramework;
 using Il2CppScheduleOne.Levelling;
 using Il2CppScheduleOne.Messaging;
 using Il2CppScheduleOne.NPCs;
+using Il2CppScheduleOne.Persistence.Datas;
 using Il2CppScheduleOne.Product;
 using Il2CppScheduleOne.Quests;
 using Il2CppScheduleOne.UI.Handover;
 using Il2CppScheduleOne.UI.Phone;
 using Il2CppScheduleOne.UI.Phone.Messages;
+using Il2CppScheduleOne.UI.Phone.ProductManagerApp;
 using MelonLoader;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.SceneManagement;
 using static Il2CppScheduleOne.UI.Handover.HandoverScreen;
+using Object = UnityEngine.Object;
 
-[assembly: MelonInfo(typeof(DealOptimizer_IL2CPP.Core), "DealOptimizer_IL2CPP", "2.0.2", "zocke1r", null)]
+[assembly: MelonInfo(typeof(DealOptimizer_IL2CPP.Core), "HighBaller_IL2CPP", "2.0.3", "zocke1r", null)]
 [assembly: MelonGame("TVGS", "Schedule I")]
 
 namespace DealOptimizer_IL2CPP
@@ -35,7 +38,7 @@ namespace DealOptimizer_IL2CPP
         {
             public static float CalculateSuccessProbability(Customer customer, ProductDefinition product, int quantity, float price)
             {
-                CustomerData customerData = customer.CustomerData;
+                var customerData = customer.CustomerData;
 
                 float valueProposition = Customer.GetValueProposition(Registry.GetItem<ProductDefinition>(customer.OfferedContractInfo.Products.entries[0].ProductID),
                     customer.OfferedContractInfo.Payment / (float)customer.OfferedContractInfo.Products.entries[0].Quantity);
@@ -46,8 +49,21 @@ namespace DealOptimizer_IL2CPP
                 float quantityMultiplier = Mathf.Lerp(0f, 2f, quantityRatio * 0.5f);
                 float penaltyMultiplier = Mathf.Lerp(1f, 0f, Mathf.Abs(quantityMultiplier - 1f));
 
+                if (newValueProposition * penaltyMultiplier > valueProposition)
+                {
+                    return 1f;
+                }
+                if (newValueProposition < 0.12f)
+                {
+                    return 0f;
+                }
+
                 float customerWeightedValue = productEnjoyment * valueProposition;
                 float proposedWeightedValue = enjoymentNormalized * penaltyMultiplier * newValueProposition;
+                if (proposedWeightedValue > customerWeightedValue)
+                {
+                    return 1f;
+                }
 
                 float valueDifference = customerWeightedValue - proposedWeightedValue;
                 float threshold = Mathf.Lerp(0f, 1f, valueDifference / 0.2f);
@@ -59,7 +75,7 @@ namespace DealOptimizer_IL2CPP
 
             public static (float maxSpend, float dailyAverage) CalculateSpendingLimits(Customer customer)
             {
-                CustomerData customerData = customer.CustomerData;
+                var customerData = customer.CustomerData;
                 float adjustedWeeklySpend = customerData.GetAdjustedWeeklySpend(customer.NPC.RelationData.RelationDelta / 5f);
                 var orderDays = customerData.GetOrderDays(customer.CurrentAddiction, customer.NPC.RelationData.RelationDelta / 5f);
                 float dailyAverage = adjustedWeeklySpend / orderDays.Count;
@@ -83,11 +99,11 @@ namespace DealOptimizer_IL2CPP
                     float probability = CalculateSuccessProbability(customer, product, quantity, mid);
                     bool success = probability >= minSuccessProbability;
 
-                    Melon<Core>.Logger.Msg($"Binary Search Iteration {iterations}:");
-                    Melon<Core>.Logger.Msg($"  Testing price: {mid}");
-                    Melon<Core>.Logger.Msg($"  Success probability: {probability}");
-                    Melon<Core>.Logger.Msg($"  Success: {success}");
-                    Melon<Core>.Logger.Msg($"  Range: low={low}, high={high}");
+                    // Melon<Core>.Logger.Msg($"Binary Search Iteration {iterations}:");
+                    // Melon<Core>.Logger.Msg($"  Testing price: {mid}");
+                    // Melon<Core>.Logger.Msg($"  Success probability: {probability}");
+                    // Melon<Core>.Logger.Msg($"  Success: {success}");
+                    // Melon<Core>.Logger.Msg($"  Range: low={low}, high={high}");
 
                     if (success)
                     {
@@ -108,9 +124,21 @@ namespace DealOptimizer_IL2CPP
 
                 Melon<Core>.Logger.Msg($"Binary Search Complete:");
                 Melon<Core>.Logger.Msg($"  Final bestFailingPrice: {bestFailingPrice}");
+                Melon<Core>.Logger.Msg($"  Final Probability: {CalculateSuccessProbability(customer, product, quantity, bestFailingPrice)}");
                 Melon<Core>.Logger.Msg($"  Final range: low={low}, high={high}");
 
                 return bestFailingPrice;
+            }
+        }
+        public class PaymentQuantityResult
+        {
+            public float Payment { get; set; }
+            public int Quantity { get; set; }
+            public EQuality Quality { get; set; }
+
+            public override string ToString()
+            {
+                return $"[Payment: {Payment}, Quantity: {Quantity}, Quality: {Quality}]";
             }
         }
 
@@ -131,6 +159,73 @@ namespace DealOptimizer_IL2CPP
             {
                 return GetCustomerFromConversation(messagesApp.currentConversation);
             }
+
+            public static float GetProductAppeal(ProductDefinition product, Customer customer)
+            {
+                float productEnjoyment = customer.GetProductEnjoyment(product, customer.customerData.Standards.GetCorrespondingQuality());
+                float num2 = product.Price / product.MarketValue;
+                float num3 = Mathf.Lerp(1f, -1f, num2 / 2f);
+                float value = productEnjoyment + num3;
+                return value;
+            }
+
+
+            public static PaymentQuantityResult CalculatePaymentQuantity(ProductDefinition product, Customer customer)
+            {
+                // Melon<Core>.Logger.Msg($"Calculating Payment Quantity for {product.Name} for {customer.name}");
+                // if (customer.AssignedDealer != null)
+                // {
+                //     Melon<Core>.Logger.Msg($"Customer has assigned dealer, using dealer inventory");
+                // }
+                var customerData = customer.customerData;
+                // Early validation
+                if (product == null)
+                {
+                    return null;
+                }
+
+                // Get customer standards quality
+                EQuality correspondingQuality = customerData.Standards.GetCorrespondingQuality();
+
+                // Calculate product enjoyment factor
+                float productEnjoyment = customer.GetProductEnjoyment(product, correspondingQuality);
+                // Melon<Core>.Logger.Msg($"Product Enjoyment: {productEnjoyment}");
+                // Calculate base spending adjusted for customer relationship
+                int orderDaysCount = 7;
+                if (customer.AssignedDealer == null)
+                {
+                    Il2CppSystem.Collections.Generic.List<EDay> orderDays = customerData.GetOrderDays(customer.CurrentAddiction, customer.NPC.RelationData.RelationDelta / 5f);
+                    orderDaysCount = orderDays.Count;
+                }
+
+                // Calculate spending based on relationship and enjoyment
+                float adjustedSpending = customerData.GetAdjustedWeeklySpend(customer.NPC.RelationData.RelationDelta / 5f) / (float)orderDaysCount;
+                adjustedSpending *= Mathf.Lerp(0.66f, 1.5f, productEnjoyment);
+                // Melon<Core>.Logger.Msg($"Adjusted Spending: {adjustedSpending}");
+
+                // Calculate price adjustment
+                float adjustedPrice = product.Price * Mathf.Lerp(0.66f, 1.5f, productEnjoyment);
+                // Melon<Core>.Logger.Msg($"Adjusted Price: {adjustedPrice}");
+                // Calculate quantity
+                int quantity = Mathf.RoundToInt(adjustedSpending / product.Price);
+                quantity = Mathf.Clamp(quantity, 1, 1000);
+
+                // Round quantity for larger orders
+                if (quantity >= 14)
+                {
+                    quantity = Mathf.RoundToInt(quantity / 5) * 5;
+                }
+                // Melon<Core>.Logger.Msg($"Quantity: {quantity}");
+                // Calculate final payment (rounded to nearest 5)
+                float payment = Mathf.RoundToInt(adjustedPrice * (float)quantity / 5f) * 5;
+
+                return new PaymentQuantityResult
+                {
+                    Payment = payment,
+                    Quantity = quantity,
+                    Quality = correspondingQuality
+                };
+            }
         }
 
         private static class DisplayHelper
@@ -148,6 +243,7 @@ namespace DealOptimizer_IL2CPP
             {
                 MessagesApp messagesApp = PlayerSingleton<MessagesApp>.Instance;
                 Customer customer = CustomerHelper.GetCustomerFromConversation(_conversation);
+
                 var (maxSpend, _) = DealCalculator.CalculateSpendingLimits(customer);
 
                 int optimalPrice = DealCalculator.FindOptimalPrice(customer, product, quantity, price, maxSpend);
@@ -296,6 +392,14 @@ namespace DealOptimizer_IL2CPP
             stringBuilder.Append($"Order Days: {offerData.Customer.CustomerData.GetOrderDays(offerData.Customer.CurrentAddiction, offerData.Customer.NPC.RelationData.RelationDelta / 5f).Count}\n");
             stringBuilder.Append($"Average Daily Spend: {dailyAverage}\n");
             stringBuilder.Append($"Daily Spend Threshold (3x Avg): {maxSpendDecimal}\n");
+            stringBuilder.Append($"Min Weekly Spend: {offerData.Customer.customerData.MinWeeklySpend}\n");
+            stringBuilder.Append($"Max Weekly Spend: {offerData.Customer.customerData.MaxWeeklySpend}\n");
+            var orderableProductString = "";
+            foreach (var product in offerData.Customer.OrderableProducts)
+            {
+                orderableProductString += $"[Name: {product.Name}, Price: {product.Price}, Market: {product.MarketValue}],\n";
+            }
+            stringBuilder.Append($"Orderable Products: {orderableProductString}\n");
 
             if (offerData.Price >= maxSpend)
             {
@@ -381,6 +485,78 @@ namespace DealOptimizer_IL2CPP
                 GUI.Label(new Rect((Screen.width / 2) - 190, (Screen.height / 2) - 250, 380, 70), counterOfferDisplayText, displayTextStyle);
             }
         }
+
+        public static ProductManager productManager;
+        public static ProductManagerApp productManagerApp;
+
+        public override void OnSceneWasLoaded(int buildIndex, string sceneName)
+        {
+            if (sceneName == "Main")
+            {
+                try
+                {
+                    productManager = Object.FindObjectsOfType<ProductManager>()[0];
+
+
+                }
+                catch (Exception e)
+                {
+                    Melon<Core>.Logger.Msg($"Error finding ProductManager: {e.Message}");
+                }
+            }
+            base.OnSceneWasLoaded(buildIndex, sceneName);
+        }
+
+        [HarmonyPatch(typeof(ProductManagerApp), nameof(ProductManagerApp.SelectProduct))]
+        static class ProductManagerSelectProductPatch
+        {
+            static void Postfix(ProductEntry entry)
+            {
+                LogProductAppeal(entry);
+            }
+        }
+
+        private class CustomerAppeal
+        {
+            public Customer Customer { get; set; }
+            public float Appeal { get; set; }
+            public PaymentQuantityResult PaymentQuantity { get; set; }
+        }
+
+        public static void LogProductAppeal(ProductEntry productEntry)
+        {
+            Melon<Core>.Logger.Msg($"Product Name: {productEntry.Definition.Name}");
+
+            var customers = Customer.UnlockedCustomers;
+
+            List<CustomerAppeal> customerAppeals = new List<CustomerAppeal>();
+
+            for (int i = 0; i < customers.Count; i++)
+            {
+                customerAppeals.Add(new CustomerAppeal
+                {
+                    Customer = customers[i],
+                    Appeal = CustomerHelper.GetProductAppeal(productEntry.Definition, customers[i]),
+                    PaymentQuantity = CustomerHelper.CalculatePaymentQuantity(productEntry.Definition, customers[i])
+                });
+            }
+
+            var sortedAppeals = customerAppeals.OrderByDescending(ca => ca.Appeal).ToList();
+
+            foreach (var ca in sortedAppeals)
+            {
+                Melon<Core>.Logger.Msg($"Customer Name: {ca.Customer.name} Appeal: {ca.Appeal}, Expected Payment: {ca.PaymentQuantity}");
+            }
+
+            StringBuilder stringBuilder = new StringBuilder();
+            stringBuilder.Append($"\nProduct: {productEntry.Definition.Name}\n");
+            stringBuilder.Append($"Potential Customers: {sortedAppeals.FindAll(ca => ca.Appeal > 0.05f).Count}\n");
+            stringBuilder.Append($"Average Order Size: {sortedAppeals.FindAll(ca => ca.Appeal > 0.05f).Average(ca => ca.PaymentQuantity.Quantity)}\n");
+            stringBuilder.Append($"Average Payment: {sortedAppeals.FindAll(ca => ca.Appeal > 0.05f).Average(ca => ca.PaymentQuantity.Payment)}\n");
+            stringBuilder.Append($"Appeal: Average: {sortedAppeals.Average(ca => ca.Appeal)}, Min: {sortedAppeals.Min(ca => ca.Appeal)}, Max: {sortedAppeals.Max(ca => ca.Appeal)}\n");
+            Melon<Core>.Logger.Msg(stringBuilder.ToString());
+        }
+
 
         public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
         {
