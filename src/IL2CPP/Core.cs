@@ -22,7 +22,7 @@ using UnityEngine.SceneManagement;
 using static Il2CppScheduleOne.UI.Handover.HandoverScreen;
 using Object = UnityEngine.Object;
 
-[assembly: MelonInfo(typeof(DealOptimizer_IL2CPP.Core), "HighBaller_IL2CPP", "2.0.3", "zocke1r", null)]
+[assembly: MelonInfo(typeof(DealOptimizer_IL2CPP.Core), "HighBaller_IL2CPP", "2.0.4", "zocke1r", null)]
 [assembly: MelonGame("TVGS", "Schedule I")]
 
 namespace DealOptimizer_IL2CPP
@@ -87,7 +87,7 @@ namespace DealOptimizer_IL2CPP
             {
                 int low = (int)currentPrice;
                 int high = (int)maxSpend;
-                int bestFailingPrice = (int)currentPrice;
+                int bestPossiblePrice = (int)currentPrice;
                 int maxIterations = 20;
                 int iterations = 0;
 
@@ -110,24 +110,24 @@ namespace DealOptimizer_IL2CPP
                         low = mid + 1;
                         if (low == high)
                         {
-                            bestFailingPrice = CalculateSuccessProbability(customer, product, quantity, mid + 1) > minSuccessProbability ? mid + 1 : mid;
+                            bestPossiblePrice = CalculateSuccessProbability(customer, product, quantity, mid + 1) > minSuccessProbability ? mid + 1 : mid;
                             break;
                         }
+                        bestPossiblePrice = mid;
                     }
                     else
                     {
-                        bestFailingPrice = mid;
                         high = mid;
                     }
                     iterations++;
                 }
 
                 Melon<Core>.Logger.Msg($"Binary Search Complete:");
-                Melon<Core>.Logger.Msg($"  Final bestFailingPrice: {bestFailingPrice}");
-                Melon<Core>.Logger.Msg($"  Final Probability: {CalculateSuccessProbability(customer, product, quantity, bestFailingPrice)}");
+                Melon<Core>.Logger.Msg($"  Final bestFailingPrice: {bestPossiblePrice}");
+                Melon<Core>.Logger.Msg($"  Final Probability: {CalculateSuccessProbability(customer, product, quantity, bestPossiblePrice)}");
                 Melon<Core>.Logger.Msg($"  Final range: low={low}, high={high}");
 
-                return bestFailingPrice;
+                return bestPossiblePrice;
             }
         }
         public class PaymentQuantityResult
